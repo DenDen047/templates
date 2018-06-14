@@ -1,14 +1,10 @@
-'''
-Training script for ImageNet
-Copyright (c) Wei YANG, 2017
-'''
-from __future__ import print_function
-
-import argparse
+# -*- coding: utf-8 -*-
 import os
-import shutil
+import sys
 import time
 import random
+import shutil
+import argparse
 
 import torch
 import torch.nn as nn
@@ -19,7 +15,7 @@ import torch.utils.data as data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-import models.imagenet as customized_models
+import models as customized_models
 
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 
@@ -42,7 +38,7 @@ model_names = default_model_names + customized_models_names
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
 # Datasets
-parser.add_argument('-d', '--data', default='path to dataset', type=str)
+parser.add_argument('-d', '--dataset', default='dir name of dataset', type=str)
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 # Optimization options
@@ -93,6 +89,13 @@ parser.add_argument('--gpu-id', default='0', type=str,
 args = parser.parse_args()
 state = {k: v for k, v in args._get_kwargs()}
 
+# config.json
+def read_config():
+    with open('./config.json', 'r') as f:
+        config = hjson.load(f)
+    return config
+config = read_config
+
 # Use CUDA
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
 use_cuda = torch.cuda.is_available()
@@ -111,12 +114,12 @@ def main():
     global best_acc
     start_epoch = args.start_epoch  # start from epoch 0 or last checkpoint epoch
 
-    if not os.path.isdir(args.checkpoint):
-        mkdir_p(args.checkpoint)
+    # checkpoint用のフォルダを確認
+    assert os.path.isdir(config['checkpoint']), 'Error: no checkpoint directory found!'
 
-    # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
+    # Dataset loading
+    traindir = os.path.join(config['dataset'], args.dataset, 'train')
+    valdir = os.path.join(config['dataset'], args.dataset, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -146,13 +149,14 @@ def main():
         model = models.__dict__[args.arch](pretrained=True)
     elif args.arch.startswith('resnext'):
         model = models.__dict__[args.arch](
-                    baseWidth=args.base_width,
-                    cardinality=args.cardinality,
-                )
+            baseWidth=args.base_width,
+            cardinality=args.cardinality,
+        )
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
 
+    # data parallel
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
         model.features = torch.nn.DataParallel(model.features)
         model.cuda()
@@ -162,35 +166,34 @@ def main():
     cudnn.benchmark = True
     print('    Total params: %.2fM' % (sum(p.numel() for p in model.parameters())/1000000.0))
 
-    # define loss function (criterion) and optimizer
+    # loss function and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
-    # Resume
+    # Resume ... 最新のcheckpointを読み込む
     title = 'ImageNet-' + args.arch
     if args.resume:
         # Load checkpoint.
         print('==> Resuming from checkpoint..')
         assert os.path.isfile(args.resume), 'Error: no checkpoint directory found!'
-        args.checkpoint = os.path.dirname(args.resume)
         checkpoint = torch.load(args.resume)
         best_acc = checkpoint['best_acc']
         start_epoch = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        logger = Logger(os.path.join(args.checkpoint, 'log.txt'), title=title, resume=True)
+        logger = Logger(os.path.join(config['checkpoint'], 'log.txt'), title=title, resume=True)
     else:
-        logger = Logger(os.path.join(args.checkpoint, 'log.txt'), title=title)
+        logger = Logger(os.path.join(config['checkpoint'], 'log.txt'), title=title)
         logger.set_names(['Learning Rate', 'Train Loss', 'Valid Loss', 'Train Acc.', 'Valid Acc.'])
 
-
+    # evaluation
     if args.evaluate:
         print('\nEvaluation only')
         test_loss, test_acc = test(val_loader, model, criterion, start_epoch, use_cuda)
         print(' Test Loss:  %.8f, Test Acc:  %.2f' % (test_loss, test_acc))
         return
 
-    # Train and val
+    # Train and Val
     for epoch in range(start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch)
 
@@ -202,23 +205,23 @@ def main():
         # append logger file
         logger.append([state['lr'], train_loss, test_loss, train_acc, test_acc])
 
-        # save model
+        # best accuracy
         is_best = test_acc > best_acc
         best_acc = max(test_acc, best_acc)
+        # save model
         save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'acc': test_acc,
                 'best_acc': best_acc,
                 'optimizer' : optimizer.state_dict(),
-            }, is_best, checkpoint=args.checkpoint)
+            }, is_best, checkpoint=config['checkpoint'])
 
     logger.close()
     logger.plot()
-    savefig(os.path.join(args.checkpoint, 'log.eps'))
+    savefig(os.path.join(config['checkpoint'], 'log.pdf'))
 
-    print('Best acc:')
-    print(best_acc)
+    print('Best acc: {}'.fromat(best_acc))
 
 def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
     # switch to train mode
@@ -250,7 +253,7 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
         top1.update(prec1[0], inputs.size(0))
         top5.update(prec5[0], inputs.size(0))
 
-        # compute gradient and do SGD step
+        # compute gradient and do optimize step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
