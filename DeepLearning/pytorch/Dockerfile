@@ -55,7 +55,7 @@ ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/opt/openmpi/lib/"
 # others
 RUN conda install -y matplotlib h5py
 RUN pip install hjson
-RUN pip install process
+RUN pip install progress
 
 # cleanup
 RUN rm -rf /var/lib/apt/lists/*
